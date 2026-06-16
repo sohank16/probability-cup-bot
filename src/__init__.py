@@ -1,0 +1,1 @@
+"""Probability Cup bot package."""

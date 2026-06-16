@@ -1,0 +1,6 @@
+requests
+python-dotenv
+pydantic
+pydantic-settings
+pandas
+pytest
