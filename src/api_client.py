@@ -72,3 +72,24 @@ class SportsPredictClient:
     ) -> list[dict[str, Any]]:
         params = {k: v for k, v in {"lobby_id": lobby_id, "match_id": match_id}.items() if v}
         return self._request("GET", "/markets", params=params)
+
+    def get_predictions(self, lobby_id: str | None = None) -> list[dict[str, Any]]:
+        params = {k: v for k, v in {"lobby_id": lobby_id}.items() if v}
+        return self._request("GET", "/predictions", params=params)
+
+    def submit_predictions_batch(
+        self,
+        predictions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/predictions/batch",
+            json={"predictions": predictions},
+        )
+
+    def update_prediction(self, prediction_id: str, probability: int) -> dict[str, Any]:
+        return self._request(
+            "PATCH",
+            f"/predictions/{prediction_id}",
+            json={"probability": probability},
+        )
