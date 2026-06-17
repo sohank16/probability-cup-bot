@@ -32,7 +32,6 @@ Steps:
 
    Script/module targets:
 
-   - `src/team_names.py`
    - `src/football_data.py`
    - `scripts/02_prepare_football_data.py`
 
@@ -46,36 +45,71 @@ Steps:
    - Tournament or competition
    - Neutral flag if available
 
+   Data window:
+
+   - Use completed international matches from 2020 onward.
+   - Exclude rows with `NA` scores.
+   - Exclude future fixtures from training.
+   - Weight old matches lightly and recent matches strongly.
+
 3. Build custom Elo ratings.
 
    Script/module targets:
 
    - `src/elo.py`
-   - `scripts/03_build_elo.py`
-   - `tests/test_elo.py`
+   - `scripts/02_prepare_football_data.py`
+   - `tests/test_elo_features.py`
 
    Elo implementation:
 
-   - Start every team at 1500.
+   - Start ranked teams from the current FIFA/Coca-Cola men's ranking points.
+   - Use 1350 as the fallback prior for teams missing from FIFA rankings.
    - Process matches chronologically.
    - Calculate expected score.
    - Update after win/draw/loss.
    - Apply a small goal-difference multiplier.
+   - Apply time decay:
+     - 2020: 0.25x
+     - 2021: 0.35x
+     - 2022: 0.50x
+     - 2023: 0.70x
+     - 2024: 0.85x
+     - 2025-2026: 1.00x
+   - Apply competition priority:
+     - 2022 FIFA World Cup: highest weight
+     - Euros, Copa America, AFCON, Asian Cup, Gold Cup, OFC Nations Cup: second tier
+     - World Cup qualifiers, other qualifiers, and friendlies: lower weight
+   - Apply confederation hierarchy to lower-priority match weights:
+     - UEFA and CONMEBOL
+     - CAF
+     - AFC
+     - CONCACAF
+     - OFC
 
 4. Build form and goal features.
 
    Script/module targets:
 
    - `src/features.py`
-   - `scripts/04_build_features.py`
+   - `scripts/02_prepare_football_data.py`
 
    Version 1 features:
 
    - Elo difference
+   - FIFA rank
+   - FIFA ranking points
+   - Confederation
+   - Weighted points since 2020
+   - Weighted goal difference since 2020
    - Last 5 points
+   - Last 10 points
    - Last 10 win rate
    - Last 5 goals for
    - Last 5 goals against
+   - Matches played since 2020
+   - Recent match count since 2024
+   - Neutral match flag
+   - Tournament weight
    - Simple expected goals estimate
 
 5. Build market parser.
@@ -202,4 +236,3 @@ If ranking is weak, improve in this order:
 ## Deployment Meaning
 
 For this competition, deployment means the bot submits predictions through the SportsPredict API. We do not need a web app first. A web dashboard can come later if we want nicer monitoring.
-

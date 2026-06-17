@@ -20,8 +20,10 @@ Day 1 builds the foundation:
 - Fetch Probability Cup events, lobbies, matches, and markets.
 - Store raw API responses for debugging.
 - Store structured records in SQLite for later modeling.
+- Prepare recent international football results.
+- Build time-weighted Elo ratings and team features.
 
-No model predictions or submissions happen on Day 1.
+No live prediction submissions happen on Day 1.
 
 ## Setup
 
@@ -41,6 +43,88 @@ python scripts/01_fetch_sportspredict.py
 ```
 
 The script fetches data from the SportsPredict API, saves raw JSON snapshots in `data/raw/`, and writes structured rows into SQLite at `data/probability_cup.sqlite`.
+
+## Prepare Football Data
+
+```bash
+python scripts/02_prepare_football_data.py
+```
+
+This downloads the current international results CSV, keeps completed matches from 2020 onward, excludes future `NA` score rows, and builds time-weighted Elo ratings.
+
+The model starts teams from the official FIFA/Coca-Cola men's ranking published on `2026-06-11`, then updates ratings with recent match results.
+
+The model weights older football lightly:
+
+- 2020: `0.25x`
+- 2021: `0.35x`
+- 2022: `0.50x`
+- 2023: `0.70x`
+- 2024: `0.85x`
+- 2025-2026: `1.00x`
+
+Competition weights are also different:
+
+- 2022 FIFA World Cup results get the most weight.
+- Major continental tournaments such as Euros, Copa America, AFCON, Asian Cup, Gold Cup, and OFC Nations Cup are second priority.
+- World Cup qualifiers, other qualifiers, and friendlies are lower priority.
+- Lower-priority matches are adjusted by confederation strength: UEFA/CONMEBOL, then CAF, AFC, CONCACAF, and OFC.
+
+Outputs are written to:
+
+- `data/processed/recent_international_matches.csv`
+- `data/processed/team_elo_ratings.csv`
+- `data/processed/team_features.csv`
+- `reports/elo_summary.md`
+
+## Analyze SportsPredict Markets
+
+```bash
+python scripts/03_analyze_markets.py
+```
+
+This reads the stored SportsPredict markets from SQLite, parses every market question, and prints:
+
+- parser coverage
+- market type counts
+- metric counts
+- real examples for each market type
+
+The parser lives in `src/question_parser.py`.
+
+## Generate Dry-Run Predictions
+
+First train the logistic regression model:
+
+```bash
+python scripts/04_train_ml_models.py
+```
+
+This trains logistic regression models for market types where historical match results provide real labels:
+
+- home win
+- away win
+- over 2.5 goals
+- both teams score
+- home scores at least 1
+- away scores at least 1
+
+The trained bundle is written to `models/goal_market_logistic.joblib`.
+
+Then generate predictions:
+
+```bash
+python scripts/04_predict_markets.py
+```
+
+This combines parsed markets, team features, Elo ratings, logistic regression, Poisson goal probabilities, and market-specific priors to produce predictions for every current market.
+
+Outputs are written to:
+
+- `reports/dry_run_predictions.csv`
+- `reports/dry_run_predictions.md`
+
+Winner and compatible goal markets use logistic regression when the trained model is available. Other goal markets use Poisson. Cards, corners, fouls, offsides, penalties, and player markets use conservative baseline priors with small team-strength adjustments.
 
 ## Why The Project Is Structured This Way
 
