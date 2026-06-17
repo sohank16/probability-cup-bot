@@ -4,3 +4,7 @@ pydantic
 pydantic-settings
 pandas
 pytest
+scikit-learn
+scipy
+joblib
+rapidfuzz

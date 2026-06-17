@@ -2,6 +2,15 @@
 
 An explainable football forecasting bot for the SportsPredict Probability Cup.
 
+## Current Goal
+
+We are now working on a two-day deployment path:
+
+- Day 1: build the football model and produce a dry-run prediction report.
+- Day 2: submit predictions through the SportsPredict API and monitor results.
+
+See `docs/two_day_deploy_plan.md` for the current execution plan.
+
 ## Day 1 Scope
 
 Day 1 builds the foundation:
