@@ -34,7 +34,8 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Then edit `.env` and set `SPORTSPREDICT_API_KEY`.
+Then edit `.env` and set `SPORTSPREDICT_API_KEY`. If you want automatic bookmaker odds,
+also set `ODDS_API_KEY` from The Odds API.
 
 ## Run Day 1 Fetch
 
@@ -125,6 +126,34 @@ Outputs are written to:
 - `reports/dry_run_predictions.md`
 
 Winner and compatible goal markets use logistic regression when the trained model is available. Other goal markets use Poisson. Cards, corners, fouls, offsides, penalties, and player markets use conservative baseline priors with small team-strength adjustments.
+
+## Add Odds And Player Form
+
+For automatic match-winner and total-goals odds, use The Odds API:
+
+```bash
+python scripts/09_fetch_odds_api_baselines.py --list-sports
+python scripts/09_fetch_odds_api_baselines.py --sport-key soccer_fifa_world_cup --markets h2h,totals
+```
+
+This writes de-vigged bookmaker baselines to `data/processed/odds_market_baselines.csv`.
+
+For special markets such as corners, shots on target, cards, fouls, offsides, and player props,
+fill bookmaker over/under odds manually in `data/external/bookmaker_prop_odds.csv`:
+
+```bash
+python scripts/08_prepare_bookmaker_prop_baselines.py --template
+python scripts/08_prepare_bookmaker_prop_baselines.py
+```
+
+For player markets, generate the player form sheet and fill:
+
+- `club_goals_2025_26`: goals for the player's club in the 2025/26 season
+- `country_starts_last_10`: starts in the player's last 10 international matches
+
+```bash
+python scripts/07_prepare_player_form_template.py
+```
 
 ## Why The Project Is Structured This Way
 

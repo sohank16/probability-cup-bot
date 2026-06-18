@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import math
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +23,7 @@ from src.ml_model import (
     predict_target_probability,
     statistical_probability_features,
 )
+from src.player_form import PlayerForm, load_player_form, player_market_prior
 from src.question_parser import ParsedMarket, parse_market_question
 from src.team_names import canonical_team_name, opponent_for, split_match_name
 
@@ -382,13 +383,30 @@ def choose_market_team(
     return home_team, away_team
 
 
+def contextualize_parsed_market(parsed: ParsedMarket, match_name: str) -> ParsedMarket:
+    if parsed.market_type != "player_shot_on_target" or not parsed.player:
+        return parsed
+    home_team, away_team = split_match_name(match_name)
+    player_as_team = canonical_team_name(parsed.player)
+    if player_as_team not in {home_team, away_team}:
+        return parsed
+    return replace(
+        parsed,
+        market_type="team_metric_over",
+        team=player_as_team,
+        player=None,
+    )
+
+
 def predict_parsed_market(
     parsed: ParsedMarket,
     match_name: str,
     features: dict[str, TeamFeatureRow],
     model_bundle: GoalMarketModelBundle | None = None,
     odds_baselines=None,
+    player_forms: dict[str, PlayerForm] | None = None,
 ) -> tuple[float, str, str, str, str]:
+    parsed = contextualize_parsed_market(parsed, match_name)
     home_team, away_team = split_match_name(match_name)
     team_name, opponent_name = choose_market_team(parsed, home_team, away_team)
     team = get_feature(features, team_name)
@@ -396,9 +414,15 @@ def predict_parsed_market(
     home = get_feature(features, home_team)
     away = get_feature(features, away_team)
     elo_diff = team.team_elo - opponent.team_elo
-
     ml_prediction = probability_from_ml_model(parsed, team, home, away, model_bundle)
-    if ml_prediction is not None:
+    player_prediction = player_market_prior(parsed, player_forms or {})
+    if player_prediction is not None:
+        probability, confidence, explanation = (
+            player_prediction.probability,
+            player_prediction.confidence,
+            player_prediction.explanation,
+        )
+    elif ml_prediction is not None:
         probability, confidence, explanation = ml_prediction
     elif parsed.metric == "goals" or parsed.market_type in {
         "match_winner",
@@ -458,6 +482,7 @@ def predict_markets(
     team_features_path: Path,
     ml_model_path: Path | None = None,
     odds_baselines_path: Path | None = None,
+    player_form_path: Path | None = None,
 ) -> list[MarketPrediction]:
     features = load_team_features(team_features_path)
     model_bundle = load_model_bundle(ml_model_path) if ml_model_path and ml_model_path.exists() else None
@@ -466,16 +491,25 @@ def predict_markets(
         if odds_baselines_path and odds_baselines_path.exists()
         else None
     )
+    player_forms = (
+        load_player_form(player_form_path)
+        if player_form_path and player_form_path.exists()
+        else {}
+    )
     predictions: list[MarketPrediction] = []
 
     for row in fetch_markets(database_path):
-        parsed = parse_market_question(row["question"])
+        parsed = contextualize_parsed_market(
+            parse_market_question(row["question"]),
+            row["match_name"],
+        )
         probability, confidence, explanation, team, opponent = predict_parsed_market(
             parsed,
             row["match_name"],
             features,
             model_bundle,
             odds_baselines,
+            player_forms,
         )
         predictions.append(
             MarketPrediction(

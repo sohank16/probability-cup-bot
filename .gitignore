@@ -11,9 +11,11 @@ data/external/*.csv
 data/external/*.json
 data/external/football_data/*.csv
 data/processed/*.csv
+!data/processed/player_form.csv
 
 models/*.joblib
 reports/*.csv
 reports/*.md
+reports/*.json
 
 .DS_Store

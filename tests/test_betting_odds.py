@@ -1,4 +1,9 @@
-from src.betting_odds import baseline_lookup, build_baselines_from_rows, parse_rows
+from src.betting_odds import (
+    baseline_lookup,
+    build_baselines_from_bookmaker_prop_rows,
+    build_baselines_from_rows,
+    parse_rows,
+)
 from src.market_priors import metric_prior
 from src.question_parser import parse_market_question
 
@@ -37,3 +42,32 @@ def test_metric_prior_can_use_odds_stat_baseline() -> None:
 
     assert prior.confidence == "medium"
     assert "Football-Data" in prior.explanation
+
+
+def test_bookmaker_prop_rows_are_devigged_and_grouped() -> None:
+    rows = [
+        {
+            "market_type": "team_metric_over",
+            "metric": "shots_on_target",
+            "period": "match",
+            "threshold": "3",
+            "bookmaker": "Book A",
+            "over_odds": "1.80",
+            "under_odds": "2.10",
+        },
+        {
+            "market_type": "team_metric_over",
+            "metric": "shots_on_target",
+            "period": "match",
+            "threshold": "3",
+            "bookmaker": "Book B",
+            "over_odds": "1.90",
+            "under_odds": "1.95",
+        },
+    ]
+
+    baselines = build_baselines_from_bookmaker_prop_rows(rows)
+
+    assert len(baselines) == 1
+    assert baselines[0].sample_size == 2
+    assert 0.50 < baselines[0].probability < 0.60

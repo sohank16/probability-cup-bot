@@ -16,6 +16,7 @@ from src.predictor import MarketPrediction, predict_markets
 DEFAULT_TEAM_FEATURES_PATH = Path("data/processed/team_features.csv")
 DEFAULT_ML_MODEL_PATH = Path("models/goal_market_logistic.joblib")
 DEFAULT_ODDS_BASELINES_PATH = Path("data/processed/odds_market_baselines.csv")
+DEFAULT_PLAYER_FORM_PATH = Path("data/processed/player_form.csv")
 DEFAULT_CSV_PATH = Path("reports/dry_run_predictions.csv")
 DEFAULT_MD_PATH = Path("reports/dry_run_predictions.md")
 
@@ -51,6 +52,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_ODDS_BASELINES_PATH,
         help="Optional odds/stat-calibrated baselines from scripts/06_prepare_odds_baselines.py.",
+    )
+    parser.add_argument(
+        "--player-form",
+        type=Path,
+        default=DEFAULT_PLAYER_FORM_PATH,
+        help="Optional player form CSV with club_goals_2025_26 and country_starts_last_10.",
     )
     return parser.parse_args()
 
@@ -179,11 +186,13 @@ def main() -> int:
 
     ml_model_path = args.ml_model if args.ml_model.exists() else None
     odds_baselines_path = args.odds_baselines if args.odds_baselines.exists() else None
+    player_form_path = args.player_form if args.player_form.exists() else None
     predictions = predict_markets(
         settings.database_path,
         args.team_features,
         ml_model_path,
         odds_baselines_path,
+        player_form_path,
     )
     write_prediction_csv(args.csv_output, predictions)
     write_prediction_markdown(args.md_output, predictions)
@@ -192,6 +201,7 @@ def main() -> int:
     print(f"Predictions generated: {len(predictions)}")
     print(f"ML model: {ml_model_path or 'not found; using statistical fallback'}")
     print(f"Odds baselines: {odds_baselines_path or 'not found; using built-in priors'}")
+    print(f"Player form: {player_form_path or 'not found; using player baselines'}")
     print(f"CSV report: {args.csv_output}")
     print(f"Markdown report: {args.md_output}")
     print("")

@@ -188,6 +188,47 @@ def build_baselines_from_rows(rows: list[dict[str, str]], source: str = "Footbal
     return [baseline for baseline in baselines if baseline.sample_size > 0]
 
 
+def build_baselines_from_bookmaker_prop_rows(
+    rows: list[dict[str, str]],
+    source: str = "Bookmaker prop odds",
+) -> list[OddsBaseline]:
+    grouped: dict[tuple[str, str, str, int], list[float]] = {}
+    sources: dict[tuple[str, str, str, int], set[str]] = {}
+
+    for row in rows:
+        market_type = (row.get("market_type") or "").strip()
+        metric = (row.get("metric") or "").strip()
+        period = (row.get("period") or "match").strip() or "match"
+        threshold = parse_float(row.get("threshold"))
+        over_odds = parse_float(row.get("over_odds"))
+        under_odds = parse_float(row.get("under_odds"))
+        if not market_type or not metric or threshold is None:
+            continue
+        fair = implied_probability_from_decimal_odds([over_odds, under_odds])
+        if fair is None:
+            continue
+        key = baseline_key(market_type, metric, period, int(threshold))
+        grouped.setdefault(key, []).append(fair[0])
+        bookmaker = (row.get("bookmaker") or source).strip() or source
+        sources.setdefault(key, set()).add(bookmaker)
+
+    baselines: list[OddsBaseline] = []
+    for (market_type, metric, period, threshold), probabilities in sorted(grouped.items()):
+        source_text = ", ".join(sorted(sources.get((market_type, metric, period, threshold), {source})))
+        baselines.append(
+            OddsBaseline(
+                market_type=market_type,
+                metric=metric,
+                period=period,
+                threshold=threshold,
+                probability=average(probabilities),
+                sample_size=len(probabilities),
+                source=f"de-vigged bookmaker odds: {source_text}",
+            )
+        )
+    return baselines
+
+
 def baseline_key(market_type: str, metric: str, period: str, threshold: int) -> tuple[str, str, str, int]:
     return market_type, metric, period, threshold
 

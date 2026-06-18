@@ -43,6 +43,15 @@ def test_parse_player_shot_on_target() -> None:
     assert parsed.threshold == 1
 
 
+def test_parse_both_teams_shot_on_target_before_player_fallback() -> None:
+    parsed = parse_market_question("Will both teams have at least 1 shot on target in the second half?")
+
+    assert parsed.market_type == "both_teams_metric_at_least"
+    assert parsed.player is None
+    assert parsed.metric == "shots_on_target"
+    assert parsed.period == "second_half"
+
+
 def test_parse_player_goal_or_assist() -> None:
     parsed = parse_market_question(
         "Will Harry Kane score or assist a goal (excluding own goals)?"
