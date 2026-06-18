@@ -5,7 +5,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.market_priors import MarketPrior, clamp_probability
+from src.market_priors import MarketPrior
+from src.player_prop_model import predict_player_prop
 from src.question_parser import ParsedMarket
 
 
@@ -130,36 +131,4 @@ def player_market_prior(
     parsed: ParsedMarket,
     player_forms: dict[str, PlayerForm],
 ) -> MarketPrior | None:
-    if parsed.market_type not in {
-        "player_shot_on_target",
-        "player_goal",
-        "player_goal_or_assist",
-    }:
-        return None
-    if not parsed.player:
-        return None
-
-    form = player_forms.get(normalize_player_name(parsed.player))
-    if not form or (form.club_goals_2025_26 is None and form.country_starts_last_10 is None):
-        return MarketPrior(
-            base_player_probability(parsed),
-            "low",
-            "Player market uses baseline because player form data is unavailable.",
-        )
-
-    probability = base_player_probability(parsed)
-    probability += club_goal_adjustment(form.club_goals_2025_26, parsed.market_type)
-    probability += country_start_adjustment(form.country_starts_last_10, parsed.market_type)
-
-    parts = []
-    if form.club_goals_2025_26 is not None:
-        parts.append(f"{form.club_goals_2025_26} club goals in 2025/26")
-    if form.country_starts_last_10 is not None:
-        parts.append(f"{form.country_starts_last_10}/10 country starts")
-    detail = ", ".join(parts) if parts else "player form fields present"
-    source = f" Source: {form.source}." if form.source else ""
-    return MarketPrior(
-        clamp_probability(probability),
-        "medium",
-        f"Player market adjusted from player form ({detail}).{source}",
-    )
+    return predict_player_prop(parsed, player_forms)

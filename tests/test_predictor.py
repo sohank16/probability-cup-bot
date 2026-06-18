@@ -79,3 +79,40 @@ def test_predict_prop_market_uses_prior_layer() -> None:
     assert opponent == "Argentina"
     assert "underdog" in explanation.lower()
 
+
+def test_second_half_goal_comparison_uses_poisson_not_neutral_fallback() -> None:
+    features = {
+        "favorite": make_feature("Favorite", 1850, goals_for=2.2, goals_against=0.7),
+        "underdog": make_feature("Underdog", 1400, goals_for=0.8, goals_against=2.0),
+    }
+    parsed = parse_market_question("Will Favorite score more goals than Underdog in the second half?")
+
+    probability, confidence, explanation, team, opponent = predict_parsed_market(
+        parsed,
+        "Favorite vs Underdog",
+        features,
+    )
+
+    assert probability > 0.50
+    assert confidence == "medium"
+    assert team == "Favorite"
+    assert opponent == "Underdog"
+    assert "Poisson" in explanation
+
+
+def test_second_half_more_goals_uses_poisson_period_split() -> None:
+    features = {
+        "favorite": make_feature("Favorite", 1850, goals_for=2.2, goals_against=0.7),
+        "underdog": make_feature("Underdog", 1400, goals_for=0.8, goals_against=2.0),
+    }
+    parsed = parse_market_question("Will the second half have more goals than the first half?")
+
+    probability, confidence, explanation, team, opponent = predict_parsed_market(
+        parsed,
+        "Favorite vs Underdog",
+        features,
+    )
+
+    assert 0.30 < probability < 0.50
+    assert confidence == "medium"
+    assert "Poisson" in explanation

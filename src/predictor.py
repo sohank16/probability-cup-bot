@@ -12,19 +12,20 @@ from src.elo import expected_score
 from src.fifa_rankings import normalize_team_name
 from src.football_data import confederation_weight
 from src.market_priors import (
-    MarketPrior,
     clamp_probability,
-    comparison_prior,
     metric_prior,
 )
+from src.market_router import market_route
 from src.ml_model import (
     GoalMarketModelBundle,
     load_model_bundle,
     predict_target_probability,
     statistical_probability_features,
 )
-from src.player_form import PlayerForm, load_player_form, player_market_prior
+from src.player_form import PlayerForm, load_player_form
+from src.player_prop_model import predict_player_prop
 from src.question_parser import ParsedMarket, parse_market_question
+from src.team_stat_model import predict_team_stat_prop
 from src.team_names import canonical_team_name, opponent_for, split_match_name
 
 
@@ -130,6 +131,18 @@ def poisson_ge(lam: float, threshold: int) -> float:
     if threshold <= 0:
         return 1.0
     return 1.0 - poisson_cdf(lam, threshold - 1)
+
+
+def poisson_greater_than(team_lambda: float, opponent_lambda: float, max_goals: int = 8) -> float:
+    probability = 0.0
+    for team_goals in range(max_goals + 1):
+        for opponent_goals in range(max_goals + 1):
+            if team_goals > opponent_goals:
+                probability += poisson_pmf(team_lambda, team_goals) * poisson_pmf(
+                    opponent_lambda,
+                    opponent_goals,
+                )
+    return probability
 
 
 def expected_goals_for(team: TeamFeatureRow, opponent: TeamFeatureRow) -> float:
@@ -327,6 +340,34 @@ def probability_for_goal_market(
             "Combined both-teams-score and total-goals probability uses independent Poisson estimates.",
         )
 
+    if parsed.market_type == "team_metric_more_than_opponent" and parsed.metric == "goals":
+        return (
+            poisson_greater_than(team_xg * period_factor, opponent_xg * period_factor),
+            "medium",
+            "Goal comparison probability uses Poisson scoreline sums for the requested period.",
+        )
+
+    if parsed.market_type == "team_first_goal_of_second_half":
+        team_half_xg = team_xg * 0.50
+        opponent_half_xg = opponent_xg * 0.50
+        second_half_goal_probability = 1.0 - math.exp(-(team_half_xg + opponent_half_xg))
+        team_share = team_half_xg / max(team_half_xg + opponent_half_xg, 0.01)
+        return (
+            second_half_goal_probability * team_share,
+            "medium",
+            "Second-half first-goal probability uses second-half expected-goal share.",
+        )
+
+    if parsed.market_type == "team_first_goal_and_opponent_second_half_score":
+        first_goal_share = team_xg / max(team_xg + opponent_xg, 0.01)
+        match_has_goal = 1.0 - math.exp(-(team_xg + opponent_xg))
+        opponent_second_half_score = poisson_ge(opponent_xg * 0.50, 1)
+        return (
+            first_goal_share * match_has_goal * opponent_second_half_score,
+            "medium",
+            "Combo market multiplies first-goal share by opponent second-half scoring probability.",
+        )
+
     if parsed.market_type == "halftime_tied":
         home_half_xg = home_xg * 0.45
         away_half_xg = away_xg * 0.45
@@ -358,10 +399,11 @@ def probability_for_goal_market(
         )
 
     if parsed.market_type == "second_half_more_goals_than_first":
+        total_xg = home_xg + away_xg
         return (
-            0.45,
-            "low",
-            "Second-half-more-goals uses a conservative historical-style baseline.",
+            poisson_greater_than(total_xg * 0.55, total_xg * 0.45),
+            "medium",
+            "Second-half-more-goals probability compares first-half and second-half Poisson goal totals.",
         )
 
     return (
@@ -414,9 +456,10 @@ def predict_parsed_market(
     home = get_feature(features, home_team)
     away = get_feature(features, away_team)
     elo_diff = team.team_elo - opponent.team_elo
+    route = market_route(parsed)
     ml_prediction = probability_from_ml_model(parsed, team, home, away, model_bundle)
-    player_prediction = player_market_prior(parsed, player_forms or {})
-    if player_prediction is not None:
+    player_prediction = predict_player_prop(parsed, player_forms or {})
+    if route == "player_prop" and player_prediction is not None:
         probability, confidence, explanation = (
             player_prediction.probability,
             player_prediction.confidence,
@@ -438,11 +481,11 @@ def predict_parsed_market(
             home,
             away,
         )
-    elif parsed.market_type == "team_metric_more_than_opponent":
-        prior = comparison_prior(parsed, elo_diff)
-        probability, confidence, explanation = prior.probability, prior.confidence, prior.explanation
-    elif parsed.market_type == "both_teams_metric_at_least":
-        prior = metric_prior(parsed, 0.0, odds_baselines)
+    elif route == "team_stat_prop":
+        if parsed.market_type == "both_teams_metric_at_least":
+            prior = metric_prior(parsed, 0.0, odds_baselines)
+        else:
+            prior = predict_team_stat_prop(parsed, team, opponent, odds_baselines)
         probability, confidence, explanation = prior.probability, prior.confidence, prior.explanation
     else:
         prior = metric_prior(parsed, elo_diff, odds_baselines)

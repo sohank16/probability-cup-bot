@@ -19,6 +19,7 @@ def test_player_form_raises_probability_for_in_form_starter() -> None:
     assert prior is not None
     assert prior.probability > 0.30
     assert prior.confidence == "medium"
+    assert "logit scoring" in prior.explanation
 
 
 def test_player_form_lowers_probability_for_non_starter() -> None:
@@ -37,3 +38,25 @@ def test_player_form_lowers_probability_for_non_starter() -> None:
 
     assert prior is not None
     assert prior.probability < 0.25
+
+
+def test_player_form_keeps_second_half_shot_lower_than_full_match_shot() -> None:
+    full_match = parse_market_question("Will Example Player have at least 1 shot on target?")
+    second_half = parse_market_question(
+        "Will Example Player have at least 1 shot on target in the second half?"
+    )
+    forms = {
+        normalize_player_name("Example Player"): PlayerForm(
+            player="Example Player",
+            club_goals_2025_26=12,
+            country_starts_last_10=8,
+            source="test",
+        )
+    }
+
+    full_match_prior = player_market_prior(full_match, forms)
+    second_half_prior = player_market_prior(second_half, forms)
+
+    assert full_match_prior is not None
+    assert second_half_prior is not None
+    assert second_half_prior.probability < full_match_prior.probability
