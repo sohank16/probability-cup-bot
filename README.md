@@ -164,3 +164,11 @@ python scripts/07_prepare_player_form_template.py
 `data/raw/` keeps exact API responses so we can later explain what information the model saw.
 
 `data/processed/` will hold cleaned football data from Day 2 onward.
+
+## Contributors
+
+Sohan Kadam  
+Aditya Kukreti  
+
+
+
