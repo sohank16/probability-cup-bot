@@ -25,3 +25,29 @@ def shrink_toward(probability: float, anchor: float, strength: float) -> float:
     return clamp_probability(
         sigmoid((logit(probability) * strength) + (logit(anchor) * (1.0 - strength)))
     )
+
+
+def poisson_pmf(lam: float, value: int) -> float:
+    return math.exp(-lam) * (lam**value) / math.factorial(value)
+
+
+def poisson_cdf(lam: float, value: int) -> float:
+    return sum(poisson_pmf(lam, current) for current in range(value + 1))
+
+
+def poisson_ge(lam: float, threshold: int) -> float:
+    if threshold <= 0:
+        return 1.0
+    return 1.0 - poisson_cdf(lam, threshold - 1)
+
+
+def poisson_greater_than(left_lambda: float, right_lambda: float, max_value: int = 14) -> float:
+    probability = 0.0
+    for left_value in range(max_value + 1):
+        for right_value in range(max_value + 1):
+            if left_value > right_value:
+                probability += poisson_pmf(left_lambda, left_value) * poisson_pmf(
+                    right_lambda,
+                    right_value,
+                )
+    return probability

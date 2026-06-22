@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.betting_odds import baseline_lookup, load_baselines_csv
+from src.current_tournament import CurrentTournamentForm, load_current_tournament_form
 from src.elo import expected_score
+from src.exact_market_odds import blend_with_exact_odds, load_exact_market_odds
 from src.fifa_rankings import normalize_team_name
 from src.football_data import confederation_weight
 from src.market_priors import (
@@ -22,9 +24,12 @@ from src.ml_model import (
     predict_target_probability,
     statistical_probability_features,
 )
+from src.name_normalization import normalize_player_name
 from src.player_form import PlayerForm, load_player_form
 from src.player_prop_model import predict_player_prop
 from src.question_parser import ParsedMarket, parse_market_question
+from src.risk_control import apply_risk_control
+from src.starting_xi import StartingXIStatus, key_for, load_starting_xi
 from src.team_stat_model import predict_team_stat_prop
 from src.team_names import canonical_team_name, opponent_for, split_match_name
 
@@ -45,6 +50,13 @@ class TeamFeatureRow:
     last_10_win_rate: float
     matches_played_since_2020: int
     recent_match_count_since_2024: int
+    current_tournament_matches: int = 0
+    current_tournament_points_per_match: float = 0.0
+    current_tournament_goal_difference_per_match: float = 0.0
+    current_tournament_goals_for_per_match: float = 0.0
+    current_tournament_goals_against_per_match: float = 0.0
+    current_tournament_shots_on_target_for_per_match: float | None = None
+    current_tournament_shots_on_target_against_per_match: float | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +105,29 @@ def load_team_features(path: Path) -> dict[str, TeamFeatureRow]:
             )
             rows[normalize_team_name(feature.team)] = feature
     return rows
+
+
+def apply_current_tournament_form(
+    features: dict[str, TeamFeatureRow],
+    current_form: dict[str, CurrentTournamentForm],
+) -> dict[str, TeamFeatureRow]:
+    if not current_form:
+        return features
+    updated = dict(features)
+    for team, form in current_form.items():
+        key = normalize_team_name(team)
+        base = updated.get(key, fallback_feature(team))
+        updated[key] = replace(
+            base,
+            current_tournament_matches=form.matches,
+            current_tournament_points_per_match=form.points_per_match,
+            current_tournament_goal_difference_per_match=form.goal_difference_per_match,
+            current_tournament_goals_for_per_match=form.goals_for_per_match,
+            current_tournament_goals_against_per_match=form.goals_against_per_match,
+            current_tournament_shots_on_target_for_per_match=form.shots_on_target_for_per_match,
+            current_tournament_shots_on_target_against_per_match=form.shots_on_target_against_per_match,
+        )
+    return updated
 
 
 def fallback_feature(team: str) -> TeamFeatureRow:
@@ -150,7 +185,16 @@ def expected_goals_for(team: TeamFeatureRow, opponent: TeamFeatureRow) -> float:
     opponent_defense = opponent.last_5_goals_against or 1.2
     base = (recent_attack + opponent_defense) / 2.0
     elo_adjustment = (team.team_elo - opponent.team_elo) / 900.0
-    return max(0.25, min(3.75, base + elo_adjustment))
+    current_attack = 0.0
+    current_defense = 0.0
+    if team.current_tournament_matches:
+        current_attack = max(-0.30, min(0.35, (team.current_tournament_goals_for_per_match - 1.35) * 0.16))
+    if opponent.current_tournament_matches:
+        current_defense = max(
+            -0.25,
+            min(0.30, (opponent.current_tournament_goals_against_per_match - 1.25) * 0.14),
+        )
+    return max(0.25, min(3.75, base + elo_adjustment + current_attack + current_defense))
 
 
 def draw_probability(elo_diff: float) -> float:
@@ -447,18 +491,42 @@ def predict_parsed_market(
     model_bundle: GoalMarketModelBundle | None = None,
     odds_baselines=None,
     player_forms: dict[str, PlayerForm] | None = None,
+    starting_xi_status: StartingXIStatus | None = None,
 ) -> tuple[float, str, str, str, str]:
     parsed = contextualize_parsed_market(parsed, match_name)
     home_team, away_team = split_match_name(match_name)
+    route = market_route(parsed)
+    player_team_feature: TeamFeatureRow | None = None
+    player_opponent_feature: TeamFeatureRow | None = None
     team_name, opponent_name = choose_market_team(parsed, home_team, away_team)
+    if route == "player_prop" and parsed.player:
+        form = (player_forms or {}).get(normalize_player_name(parsed.player))
+        player_national_team = getattr(form, "national_team", None) if form else None
+        if player_national_team:
+            player_team = canonical_team_name(player_national_team)
+            player_opponent = opponent_for(player_team, home_team, away_team)
+            if player_opponent:
+                team_name, opponent_name = player_team, player_opponent
+
     team = get_feature(features, team_name)
     opponent = get_feature(features, opponent_name)
+    if route == "player_prop" and parsed.player:
+        form = (player_forms or {}).get(normalize_player_name(parsed.player))
+        player_national_team = getattr(form, "national_team", None) if form else None
+        if player_national_team and opponent_for(player_national_team, home_team, away_team):
+            player_team_feature = team
+            player_opponent_feature = opponent
     home = get_feature(features, home_team)
     away = get_feature(features, away_team)
     elo_diff = team.team_elo - opponent.team_elo
-    route = market_route(parsed)
     ml_prediction = probability_from_ml_model(parsed, team, home, away, model_bundle)
-    player_prediction = predict_player_prop(parsed, player_forms or {})
+    player_prediction = predict_player_prop(
+        parsed,
+        player_forms or {},
+        player_team_feature,
+        player_opponent_feature,
+        starting_xi_status,
+    )
     if route == "player_prop" and player_prediction is not None:
         probability, confidence, explanation = (
             player_prediction.probability,
@@ -482,10 +550,7 @@ def predict_parsed_market(
             away,
         )
     elif route == "team_stat_prop":
-        if parsed.market_type == "both_teams_metric_at_least":
-            prior = metric_prior(parsed, 0.0, odds_baselines)
-        else:
-            prior = predict_team_stat_prop(parsed, team, opponent, odds_baselines)
+        prior = predict_team_stat_prop(parsed, team, opponent, odds_baselines)
         probability, confidence, explanation = prior.probability, prior.confidence, prior.explanation
     else:
         prior = metric_prior(parsed, elo_diff, odds_baselines)
@@ -526,8 +591,15 @@ def predict_markets(
     ml_model_path: Path | None = None,
     odds_baselines_path: Path | None = None,
     player_form_path: Path | None = None,
+    current_tournament_form_path: Path | None = None,
+    exact_market_odds_path: Path | None = None,
+    starting_xi_path: Path | None = None,
 ) -> list[MarketPrediction]:
     features = load_team_features(team_features_path)
+    features = apply_current_tournament_form(
+        features,
+        load_current_tournament_form(current_tournament_form_path),
+    )
     model_bundle = load_model_bundle(ml_model_path) if ml_model_path and ml_model_path.exists() else None
     odds_baselines = (
         baseline_lookup(load_baselines_csv(odds_baselines_path))
@@ -539,12 +611,19 @@ def predict_markets(
         if player_form_path and player_form_path.exists()
         else {}
     )
+    exact_market_odds = load_exact_market_odds(exact_market_odds_path)
+    starting_xi = load_starting_xi(starting_xi_path)
     predictions: list[MarketPrediction] = []
 
     for row in fetch_markets(database_path):
         parsed = contextualize_parsed_market(
             parse_market_question(row["question"]),
             row["match_name"],
+        )
+        starting_status = (
+            starting_xi.get(key_for(row["match_name"], parsed.player))
+            if parsed.player
+            else None
         )
         probability, confidence, explanation, team, opponent = predict_parsed_market(
             parsed,
@@ -553,7 +632,26 @@ def predict_markets(
             model_bundle,
             odds_baselines,
             player_forms,
+            starting_status,
         )
+        exact_odds = exact_market_odds.get(row["market_id"])
+        if exact_odds is not None:
+            original_probability = probability
+            probability = blend_with_exact_odds(probability, exact_odds)
+            confidence = "high" if exact_odds.sample_size >= 2 else "medium"
+            explanation += (
+                f" Exact odds baseline blended {original_probability:.1%} with "
+                f"{exact_odds.probability:.1%} from {exact_odds.source}."
+            )
+        controlled = apply_risk_control(
+            probability,
+            parsed,
+            confidence,
+            has_exact_odds=exact_odds is not None,
+            has_confirmed_lineup=bool(starting_status and starting_status.is_confirmed),
+        )
+        probability = controlled.probability
+        explanation += controlled.explanation_suffix
         predictions.append(
             MarketPrediction(
                 market_id=row["market_id"],

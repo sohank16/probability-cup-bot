@@ -5,9 +5,10 @@ import csv
 import json
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -19,6 +20,10 @@ from src.config import load_settings
 DEFAULT_PREDICTIONS_PATH = Path("reports/dry_run_predictions.csv")
 DEFAULT_REPORTS_DIR = Path("reports")
 BATCH_SIZE = 50
+DEFAULT_UPDATE_DELAY_SECONDS = 0.35
+DEFAULT_RETRY_SECONDS = 8.0
+DEFAULT_MAX_RETRIES = 5
+T = TypeVar("T")
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +53,24 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_REPORTS_DIR,
         help="Where to write submission response JSON.",
     )
+    parser.add_argument(
+        "--update-delay-seconds",
+        type=float,
+        default=DEFAULT_UPDATE_DELAY_SECONDS,
+        help="Delay between individual PATCH updates to avoid API throttling.",
+    )
+    parser.add_argument(
+        "--retry-seconds",
+        type=float,
+        default=DEFAULT_RETRY_SECONDS,
+        help="Initial wait after a 429 rate-limit response. Retries use linear backoff.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=DEFAULT_MAX_RETRIES,
+        help="Maximum retries for each API request that hits a 429 rate limit.",
+    )
     return parser.parse_args()
 
 
@@ -60,6 +83,17 @@ def probability_to_api_int(probability: str) -> int:
     if value <= 1.0:
         value *= 100.0
     return max(1, min(99, round(value)))
+
+
+def parse_existing_probability(prediction: dict[str, Any]) -> int | None:
+    for key in ("probability", "probability_percent", "probabilityPercent"):
+        if key not in prediction or prediction[key] is None:
+            continue
+        try:
+            return probability_to_api_int(str(prediction[key]))
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def load_prediction_rows(path: Path) -> list[dict[str, str]]:
@@ -126,6 +160,32 @@ def existing_predictions_by_market(
     return existing
 
 
+def is_rate_limit_error(error: SportsPredictAPIError) -> bool:
+    return "429" in str(error) or "Too Many Requests" in str(error)
+
+
+def call_with_rate_limit_retries(
+    operation: Callable[[], T],
+    label: str,
+    max_retries: int,
+    retry_seconds: float,
+) -> T:
+    attempt = 0
+    while True:
+        try:
+            return operation()
+        except SportsPredictAPIError as exc:
+            attempt += 1
+            if not is_rate_limit_error(exc) or attempt > max_retries:
+                raise
+            wait_seconds = retry_seconds * attempt
+            print(
+                f"Rate limited during {label}. "
+                f"Waiting {wait_seconds:.1f}s before retry {attempt}/{max_retries}..."
+            )
+            time.sleep(wait_seconds)
+
+
 def write_report(report_dir: Path, payload: dict[str, Any]) -> Path:
     report_dir.mkdir(parents=True, exist_ok=True)
     path = report_dir / f"{utc_stamp()}_submission_response.json"
@@ -187,6 +247,12 @@ def main() -> int:
         for payload in payloads
         if payload["market_id"] in existing_by_market
     ]
+    changed_update_payloads = [
+        payload
+        for payload in update_payloads
+        if parse_existing_probability(existing_by_market[payload["market_id"]])
+        != int(payload["probability"])
+    ]
     submit_payloads = [
         payload
         for payload in payloads
@@ -194,19 +260,39 @@ def main() -> int:
     ]
 
     print(f"Existing predictions to update: {len(update_payloads)}")
+    print(f"Existing predictions already unchanged: {len(update_payloads) - len(changed_update_payloads)}")
+    print(f"Existing predictions changed: {len(changed_update_payloads)}")
     print(f"New predictions to submit: {len(submit_payloads)}")
+    print(f"Update delay: {args.update_delay_seconds:.2f}s")
+    print(f"Rate-limit retries: {args.max_retries} with {args.retry_seconds:.1f}s base wait")
 
     submit_responses: list[dict[str, Any]] = []
     update_responses: list[dict[str, Any]] = []
+    skipped_update_payloads = len(update_payloads) - len(changed_update_payloads)
     try:
-        for payload in update_payloads:
+        for index, payload in enumerate(changed_update_payloads, start=1):
             prediction_id = existing_by_market[payload["market_id"]]["id"]
             update_responses.append(
-                client.update_prediction(prediction_id, int(payload["probability"]))
+                call_with_rate_limit_retries(
+                    lambda prediction_id=prediction_id, probability=int(payload["probability"]): client.update_prediction(
+                        prediction_id,
+                        probability,
+                    ),
+                    f"update {index}/{len(changed_update_payloads)}",
+                    args.max_retries,
+                    args.retry_seconds,
+                )
             )
+            if args.update_delay_seconds > 0 and index < len(changed_update_payloads):
+                time.sleep(args.update_delay_seconds)
 
         for batch_number, batch in enumerate(chunks(submit_payloads, BATCH_SIZE), start=1):
-            response = client.submit_predictions_batch(batch)
+            response = call_with_rate_limit_retries(
+                lambda batch=batch: client.submit_predictions_batch(batch),
+                f"submit batch {batch_number}",
+                args.max_retries,
+                args.retry_seconds,
+            )
             submit_responses.append(response)
             print(
                 f"Batch {batch_number}: "
@@ -221,6 +307,7 @@ def main() -> int:
                 "mode": "submit_or_update",
                 "partial_submit_responses": submit_responses,
                 "partial_update_responses": update_responses,
+                "skipped_updates": skipped_update_payloads,
                 "error": str(exc),
             },
         )
@@ -233,7 +320,8 @@ def main() -> int:
             "mode": "submit_or_update",
             "payloads": len(payloads),
             "submitted": len(submit_payloads),
-            "updated": len(update_payloads),
+            "updated": len(changed_update_payloads),
+            "skipped_updates": skipped_update_payloads,
             "submit_responses": submit_responses,
             "update_responses": update_responses,
         },

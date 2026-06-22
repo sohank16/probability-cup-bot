@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import csv
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from src.market_priors import MarketPrior
+from src.name_normalization import normalize_player_name
 from src.player_prop_model import predict_player_prop
 from src.question_parser import ParsedMarket
+from src.team_names import canonical_team_name, split_match_name
 
 
 @dataclass(frozen=True)
@@ -16,12 +17,7 @@ class PlayerForm:
     club_goals_2025_26: int | None
     country_starts_last_10: int | None
     source: str
-
-
-def normalize_player_name(name: str) -> str:
-    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
-    cleaned = "".join(character.lower() if character.isalnum() else " " for character in ascii_name)
-    return " ".join(cleaned.split())
+    national_team: str | None = None
 
 
 def parse_optional_int(value: str | None) -> int | None:
@@ -31,6 +27,31 @@ def parse_optional_int(value: str | None) -> int | None:
     if not cleaned:
         return None
     return int(float(cleaned))
+
+
+def infer_national_team(row: dict[str, str]) -> str | None:
+    explicit_team = (row.get("national_team") or "").strip()
+    if explicit_team:
+        return canonical_team_name(explicit_team)
+
+    examples = [
+        item.strip()
+        for item in (row.get("example_matches") or "").split(";")
+        if item.strip()
+    ]
+    if len(examples) < 2:
+        return None
+
+    match_teams = []
+    for example in examples:
+        try:
+            match_teams.append(set(split_match_name(example)))
+        except ValueError:
+            return None
+    common_teams = set.intersection(*match_teams)
+    if len(common_teams) != 1:
+        return None
+    return next(iter(common_teams))
 
 
 def load_player_form(path: Path) -> dict[str, PlayerForm]:
@@ -52,6 +73,7 @@ def load_player_form(path: Path) -> dict[str, PlayerForm]:
                     else parse_optional_int(row.get("started_last_2"))
                 ),
                 source=row.get("source", "").strip(),
+                national_team=infer_national_team(row),
             )
             for row in rows
             if row.get("player")

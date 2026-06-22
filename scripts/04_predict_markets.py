@@ -17,6 +17,9 @@ DEFAULT_TEAM_FEATURES_PATH = Path("data/processed/team_features.csv")
 DEFAULT_ML_MODEL_PATH = Path("models/goal_market_logistic.joblib")
 DEFAULT_ODDS_BASELINES_PATH = Path("data/processed/odds_market_baselines.csv")
 DEFAULT_PLAYER_FORM_PATH = Path("data/processed/player_form.csv")
+DEFAULT_CURRENT_TOURNAMENT_FORM_PATH = Path("data/processed/current_tournament_results.csv")
+DEFAULT_EXACT_MARKET_ODDS_PATH = Path("data/processed/exact_market_odds.csv")
+DEFAULT_STARTING_XI_PATH = Path("data/processed/starting_xi.csv")
 DEFAULT_CSV_PATH = Path("reports/dry_run_predictions.csv")
 DEFAULT_MD_PATH = Path("reports/dry_run_predictions.md")
 
@@ -59,11 +62,36 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_PLAYER_FORM_PATH,
         help="Optional player form CSV with club_goals_2025_26 and country_starts_last_10.",
     )
+    parser.add_argument(
+        "--current-tournament-form",
+        type=Path,
+        default=DEFAULT_CURRENT_TOURNAMENT_FORM_PATH,
+        help="Optional current World Cup results CSV for short-term tournament form.",
+    )
+    parser.add_argument(
+        "--exact-market-odds",
+        type=Path,
+        default=DEFAULT_EXACT_MARKET_ODDS_PATH,
+        help="Optional exact market-level de-vigged odds/crowd baseline CSV.",
+    )
+    parser.add_argument(
+        "--starting-xi",
+        type=Path,
+        default=DEFAULT_STARTING_XI_PATH,
+        help="Optional confirmed/probable starting XI CSV for player prop markets.",
+    )
     return parser.parse_args()
 
 
 def ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def count_data_rows(path: Path | None) -> int:
+    if path is None or not path.exists():
+        return 0
+    with path.open("r", newline="", encoding="utf-8") as input_file:
+        return sum(1 for row in csv.DictReader(input_file) if any((value or "").strip() for value in row.values()))
 
 
 def write_prediction_csv(path: Path, predictions: list[MarketPrediction]) -> None:
@@ -187,12 +215,24 @@ def main() -> int:
     ml_model_path = args.ml_model if args.ml_model.exists() else None
     odds_baselines_path = args.odds_baselines if args.odds_baselines.exists() else None
     player_form_path = args.player_form if args.player_form.exists() else None
+    current_tournament_form_path = (
+        args.current_tournament_form
+        if args.current_tournament_form.exists()
+        else None
+    )
+    exact_market_odds_path = args.exact_market_odds if args.exact_market_odds.exists() else None
+    starting_xi_path = args.starting_xi if args.starting_xi.exists() else None
+    exact_market_odds_rows = count_data_rows(exact_market_odds_path)
+    starting_xi_rows = count_data_rows(starting_xi_path)
     predictions = predict_markets(
         settings.database_path,
         args.team_features,
         ml_model_path,
         odds_baselines_path,
         player_form_path,
+        current_tournament_form_path,
+        exact_market_odds_path,
+        starting_xi_path,
     )
     write_prediction_csv(args.csv_output, predictions)
     write_prediction_markdown(args.md_output, predictions)
@@ -202,6 +242,15 @@ def main() -> int:
     print(f"ML model: {ml_model_path or 'not found; using statistical fallback'}")
     print(f"Odds baselines: {odds_baselines_path or 'not found; using built-in priors'}")
     print(f"Player form: {player_form_path or 'not found; using player baselines'}")
+    print(f"Current tournament form: {current_tournament_form_path or 'not found; using long-term form only'}")
+    if exact_market_odds_rows:
+        print(f"Exact market odds: {exact_market_odds_path} ({exact_market_odds_rows} rows)")
+    else:
+        print("Exact market odds: no usable rows; skipping odds anchor")
+    if starting_xi_rows:
+        print(f"Starting XI: {starting_xi_path} ({starting_xi_rows} rows)")
+    else:
+        print("Starting XI: no usable rows; skipping lineup adjustments")
     print(f"CSV report: {args.csv_output}")
     print(f"Markdown report: {args.md_output}")
     print("")

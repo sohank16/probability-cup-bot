@@ -12,6 +12,11 @@ data/external/*.json
 data/external/football_data/*.csv
 data/processed/*.csv
 !data/processed/player_form.csv
+!data/processed/current_tournament_results.csv
+!data/processed/exact_market_odds.csv
+!data/processed/starting_xi.csv
+!data/processed/nn_goal_training_dataset.csv
+!data/processed/nn_current_market_features.csv
 
 models/*.joblib
 reports/*.csv

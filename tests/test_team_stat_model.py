@@ -32,7 +32,17 @@ def test_attacking_team_gets_higher_shots_probability_than_weaker_team() -> None
     underdog_prior = predict_team_stat_prop(reverse, underdog, favorite)
 
     assert favorite_prior.probability > underdog_prior.probability
-    assert "Team stat prop model" in favorite_prior.explanation
+    assert "SOT specialist" in favorite_prior.explanation
+
+
+def test_multi_shot_threshold_is_capped_even_for_large_favorite() -> None:
+    favorite = make_feature("Favorite", 2050, 3.2, 0.5)
+    underdog = make_feature("Underdog", 1200, 0.4, 3.0)
+    parsed = parse_market_question("Will Favorite have 6 or more shots on target?")
+
+    prior = predict_team_stat_prop(parsed, favorite, underdog)
+
+    assert prior.probability <= 0.76
 
 
 def test_underdog_pressure_raises_foul_comparison_probability() -> None:
