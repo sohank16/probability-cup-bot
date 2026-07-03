@@ -169,6 +169,7 @@ python scripts/07_prepare_player_form_template.py
 
 Sohan Kadam  
 Aditya Kukreti  
+Gopal Moranya
 
 
 
